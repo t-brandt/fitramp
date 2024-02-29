@@ -1,4 +1,5 @@
 import numpy as np
+from scipy import special
 import warnings
 
 class Covar:
@@ -103,7 +104,7 @@ class Covar:
         
         if self.pedestal:
             raise ValueError("Cannot compute bias with a Covar class that includes a pedestal fit.")
-        
+
         alpha = countrates[np.newaxis, :]*self.alpha_phnoise[:, np.newaxis]
         alpha += sig**2*self.alpha_readnoise[:, np.newaxis]
         beta = countrates[np.newaxis, :]*self.beta_phnoise[:, np.newaxis]
@@ -137,6 +138,9 @@ class Covar:
                 
             bias[i] = np.linalg.multi_dot([c[np.newaxis, :], C, dw_da[:, i]])
 
+            sig_a = np.sqrt(np.linalg.multi_dot([c[np.newaxis, :], C, c[:, np.newaxis]]))
+            bias[i] *= 0.5*(1 + special.erf(countrates[i]/sig_a/2**0.5))
+            
         return bias
                 
 
@@ -209,7 +213,7 @@ class Ramp_Result:
         
         
 def fit_ramps(diffs, Cov, sig, countrateguess=None, diffs2use=None,
-              detect_jumps=False, resetval=0, resetsig=np.inf):
+              detect_jumps=False, resetval=0, resetsig=np.inf, rescale=True):
 
     """
     Function fit_ramps.  Fits ramps to read differences using the 
@@ -239,6 +243,10 @@ def fit_ramps(diffs, Cov, sig, countrateguess=None, diffs2use=None,
                      reset values.  Default np.inf, i.e., reset values
                      have flat priors.  Irrelevant unless Cov.pedestal
                      is True.]
+    9. rescale [boolean, scale the covariance matrix internally to avoid
+                     possible overflow/underflow problems for long ramps.
+                     Slightly increases computational cost.  Default
+                     True. ]
 
     Returns:
     Class Ramp_Result holding lots of information
@@ -263,6 +271,18 @@ def fit_ramps(diffs, Cov, sig, countrateguess=None, diffs2use=None,
     alpha += sig**2*Cov.alpha_readnoise[:, np.newaxis]
     beta = countrateguess*Cov.beta_phnoise[:, np.newaxis]
     beta += sig**2*Cov.beta_readnoise[:, np.newaxis]
+    
+    # rescale the covariance matrix to a determinant of order 1 to
+    # avoid possible overflow/underflow.  The uncertainty and chi
+    # squared value will need to be scaled back later.
+    
+    if rescale:
+        scale = np.exp(np.mean(np.log(alpha), axis=0))
+    else:
+        scale = 1
+    
+    alpha /= scale
+    beta /= scale
     
     ndiffs, npix = alpha.shape
 
@@ -335,8 +355,8 @@ def fit_ramps(diffs, Cov, sig, countrateguess=None, diffs2use=None,
 
     if not Cov.pedestal:
         r.countrate = B/C
-        r.chisq = A - B**2/C
-        r.uncert = np.sqrt(1/C)
+        r.chisq = (A - B**2/C)/scale
+        r.uncert = np.sqrt(scale/C)
         r.weights = dC/C
 
     # If we are computing the pedestal, then we use the other formulas
@@ -348,21 +368,22 @@ def fit_ramps(diffs, Cov, sig, countrateguess=None, diffs2use=None,
         
         # Calculate the pedestal and slope using the equations in the paper.
         # Do not compute weights for this case.
-        
-        b = dB[0] - dC[0]*B/C/dt**2 + resetval/resetsig**2
-        b /= Cinv_11/dt**2 - dC[0]**2/C/dt**2 + 1/resetsig**2
+
+        b = dB[0]*C*dt - B*dC[0]*dt + dt**2*C*resetval/resetsig**2
+        b /= C*Cinv_11 - dC[0]**2 + dt**2*C/resetsig**2
         a = B/C - b*dC[0]/C/dt
         r.pedestal = b
         r.countrate = a
         r.chisq = A + a**2*C + b**2/dt**2*Cinv_11
         r.chisq += - 2*b/dt*dB[0] - 2*a*B + 2*a*b/dt*dC[0]
+        r.chisq /= scale
         
         # elements of the inverse covariance matrix
         M = [C, dC[0]/dt, Cinv_11/dt**2 + 1/resetsig**2]
         detM = M[0]*M[-1] - M[1]**2
-        r.uncert = np.sqrt(M[-1]/detM)
-        r.uncert_pedestal = np.sqrt(M[0]/detM)
-        r.covar_countrate_pedestal = -M[1]/detM
+        r.uncert = np.sqrt(scale*M[-1]/detM)
+        r.uncert_pedestal = np.sqrt(scale*M[0]/detM)
+        r.covar_countrate_pedestal = -scale*M[1]/detM
         
     # The code below computes the best chi squared, best-fit slope,
     # and its uncertainty leaving out each resultant difference in
@@ -417,6 +438,10 @@ def fit_ramps(diffs, Cov, sig, countrateguess=None, diffs2use=None,
             # invert the covariance matrix of a, b to get the uncertainty on a
             r.uncert_oneomit = np.sqrt(Cinv_diag/(C*Cinv_diag - dC**2))
             r.jumpsig_oneomit = np.sqrt(C/(C*Cinv_diag - dC**2))
+
+            r.chisq_oneomit /= scale
+            r.uncert_oneomit *= np.sqrt(scale)
+            r.jumpsig_oneomit *= np.sqrt(scale)
             
         # Now for two omissions in a row.  This is more work.  Again,
         # all equations are in the paper.  I first define three
@@ -440,13 +465,15 @@ def fit_ramps(diffs, Cov, sig, countrateguess=None, diffs2use=None,
             r.chisq_twoomit = A + a**2*C + b**2*Cinv_diag[:-1] + c**2*Cinv_diag[1:]
             r.chisq_twoomit -= 2*a*B + 2*b*dB[:-1] + 2*c*dB[1:]
             r.chisq_twoomit += 2*a*b*dC[:-1] + 2*a*c*dC[1:] + 2*b*c*Cinv_offdiag
-            
+            r.chisq_twoomit /= scale
+
             # uncertainty on the slope from inverting the (a, b, c)
             # covariance matrix
             fac = Cinv_diag[1:]*Cinv_diag[:-1] - Cinv_offdiag**2
             term2 = dC[:-1]*(dC[:-1]*Cinv_diag[1:] - Cinv_offdiag*dC[1:])
             term3 = dC[1:]*(dC[:-1]*Cinv_offdiag - Cinv_diag[:-1]*dC[1:])
             r.uncert_twoomit = np.sqrt(fac/(C*fac - term2 + term3))
+            r.uncert_twoomit *= np.sqrt(scale)
         
         r.fill_masked_reads(diffs2use)            
             
