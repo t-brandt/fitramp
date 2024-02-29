@@ -1,12 +1,12 @@
 import numpy as np
-from scipy import optimize
+from scipy import optimize, special
 import fitramp
 
 
 def run_checks(nreads_Cmatrix=1000000, countrate=20, sig=20, nramps_test=10,
                nramps_testjumps=100000, 
-               readtimes=[1, 2, 3, [4, 5], [6, 7, 8], [9, 10, 12], [14, 17],
-                          [20, 21], 22, [24, 25]]):
+               readtimes=[3, [4, 5], [6, 7, 8], [9, 10, 12], [14, 17],
+                          [20, 21], 22, [24, 25], 26, 27]):
 
     """
 
@@ -17,11 +17,13 @@ def run_checks(nreads_Cmatrix=1000000, countrate=20, sig=20, nramps_test=10,
     allpassed = True
     countrate = 20
     sig = 20
+    testpedestal = 1000
     
     C = fitramp.Covar(readtimes, pedestal=True)
     
     print("Generating sample ramps")
     y = fitramp.getramps(countrate, sig, readtimes, nramps=nreads_Cmatrix)
+    y += testpedestal
     d = y*1.
     d[0] /= C.mean_t[0]
     d[1:] = (y[1:] - y[:-1])/C.delta_t[:, np.newaxis]
@@ -77,6 +79,12 @@ def run_checks(nreads_Cmatrix=1000000, countrate=20, sig=20, nramps_test=10,
     par_ramp = np.array([r.countrate[0], r.pedestal[0]])
     cov_ramp = np.array([[r.uncert[0]**2, r.covar_countrate_pedestal[0]],
                           [r.covar_countrate_pedestal[0], r.uncert_pedestal[0]**2]])
+
+    # need to rescale units for the pedestal
+    par[1] *= C.mean_t[0]
+    cov[1, 0] *= C.mean_t[0]
+    cov[0, 1] *= C.mean_t[0]
+    cov[1, 1] *= C.mean_t[0]**2
     
     if not np.all(np.isclose(par, par_ramp)) or not np.all(np.isclose(cov, cov_ramp)):
         print("Failed initial pedestal test.")
@@ -119,7 +127,13 @@ def run_checks(nreads_Cmatrix=1000000, countrate=20, sig=20, nramps_test=10,
     par_ramp = np.array([r.countrate[0], r.pedestal[0]])
     cov_ramp = np.array([[r.uncert[0]**2, r.covar_countrate_pedestal[0]],
                           [r.covar_countrate_pedestal[0], r.uncert_pedestal[0]**2]])
-    
+
+    # need to rescale units for the pedestal
+    par[1] *= C.mean_t[0]
+    cov[1, 0] *= C.mean_t[0]
+    cov[0, 1] *= C.mean_t[0]
+    cov[1, 1] *= C.mean_t[0]**2
+
     if not np.all(np.isclose(par, par_ramp)) or not np.all(np.isclose(cov, cov_ramp)):
         print("Failed pedestal test with a masked difference.")
         allpassed = False
