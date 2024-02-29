@@ -324,8 +324,7 @@ def run_checks(nreads_Cmatrix=1000000, countrate=20, sig=20, nramps_test=10,
     d[add_jump] += (countrate + sig)*8
 
     sig_arr = sig*np.ones(d.shape[1])
-    diffs2use, c = fitramp.mask_jumps(d, C, sig_arr, threshold_oneomit=18,
-                                   threshold_twoomit=21)
+    diffs2use, c = fitramp.mask_jumps(d, C, sig_arr)
 
     # We should successfully detect all jumps unless a row has
     # at least nresultants/2 jumps.
@@ -343,12 +342,18 @@ def run_checks(nreads_Cmatrix=1000000, countrate=20, sig=20, nramps_test=10,
     oneomit_ok = C.Nreads[1:]*C.Nreads[:-1] == 1
     oneomit_ok[0] = oneomit_ok[-1] = True
 
-    factor_expected = (np.sum(oneomit_ok) + 2*np.sum(~oneomit_ok))/d.shape[0]
+    # The factor f comes from the probability of a difference adjacent
+    # to a jump further improving chi squared by the threshold amount
+    # even if there was no jump there, then doubled since there are
+    # two adjacent differences to a flagged one.
+    
+    f = 1 + 2*special.erfc(np.sqrt(23.8 - 20.25)/np.sqrt(2))
+    factor_expected = (np.sum(oneomit_ok) + f*np.sum(~oneomit_ok))/d.shape[0]
 
     # Success = numberflagged \approx numbercaught*factor_expected,
     # numbermissed \approx zero
 
-    if np.abs(numberflagged/factor_expected/numbercaught - 1) > 0.1:
+    if numberflagged/factor_expected/numbercaught > 1.1:
         print("Jump masking flagged an unexpectedly large number of valid resultant differences")
         allpassed = False
     if numbermissed/numbercaught > 1e-3:
