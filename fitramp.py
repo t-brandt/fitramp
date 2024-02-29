@@ -482,7 +482,8 @@ def fit_ramps(diffs, Cov, sig, countrateguess=None, diffs2use=None,
 
 
 
-def mask_jumps(diffs, Cov, sig, threshold_oneomit=20.25, threshold_twoomit=23.8):
+def mask_jumps(diffs, Cov, sig, threshold_oneomit=20.25,
+               threshold_twoomit=23.8, diffs2use=None):
 
     """
 
@@ -501,6 +502,12 @@ def mask_jumps(diffs, Cov, sig, threshold_oneomit=20.25, threshold_twoomit=23.8)
     5. threshold_twoomit [float, minimum chisq improvement to exclude 
                           two sequential resultant differences.  
                           Default 23.8, i.e., 4.5 sigma]
+    6. diffs2use [a 2D array of the same shape as d, one for resultant
+                  differences that appear ok and zero for resultant
+                  differences flagged as contaminated.  These flagged
+                  differences will be ignored throughout jump detection,
+                  which will only flag additional differences and
+                  overwrite the data in this array. Default None]
 
     Returns:
     1. diffs2use [a 2D array of the same shape as d, one for resultant
@@ -524,7 +531,7 @@ def mask_jumps(diffs, Cov, sig, threshold_oneomit=20.25, threshold_twoomit=23.8)
     # gaps between resultants then a one-omit search might still be a
     # good idea even with multiple-read resultants.
 
-    oneomit_ok = Cov.Nreads[1:]*Cov.Nreads[:-1] == 1
+    oneomit_ok = Cov.Nreads[1:]*Cov.Nreads[:-1] >= 1
     oneomit_ok[0] = oneomit_ok[-1] = True
 
     # Other than that, we need to omit two.  If a resultant has more
@@ -535,8 +542,9 @@ def mask_jumps(diffs, Cov, sig, threshold_oneomit=20.25, threshold_twoomit=23.8)
     
     # This is the array to return: one for resultant differences to
     # use, zero for resultant differences to ignore.
-    
-    diffs2use = np.ones(d.shape, np.uint8)
+
+    if diffs2use is None:
+        diffs2use = np.ones(d.shape, np.uint8)
 
     # We need to estimate the covariance matrix.  I'll use the median
     # here for now to limit problems with the count rate in reads with
@@ -589,10 +597,9 @@ def mask_jumps(diffs, Cov, sig, threshold_oneomit=20.25, threshold_twoomit=23.8)
         best_dchisq += best_dchisq_two*(best_dchisq_two > threshold_twoomit)*(~onedropbetter)
 
         # If nothing exceeded the threshold set the improvement to
-        # negative so that nothing will be omitted; the chi squared
-        # value will never match the actual one.
+        # NaN so that dchisq==best_dchisq is guaranteed to be False.
         
-        best_dchisq[best_dchisq == 0] = -1
+        best_dchisq[best_dchisq == 0] = np.nan
 
         # Now make the masks for which resultant difference(s) to
         # drop, count the number of ramps affected, and drop them.
@@ -634,11 +641,12 @@ def mask_jumps(diffs, Cov, sig, threshold_oneomit=20.25, threshold_twoomit=23.8)
         recheck[:] = dropped
 
         # Do not try to search for bad resultants if we have already
-        # given up on all but one or two resultants in the ramp.  If
-        # there are only two left we have no way of choosing which one
-        # is "good".
+        # given up on all but one, two, or three resultant differences
+        # in the ramp.  If there are only two left we have no way of
+        # choosing which one is "good".  If there are three left we
+        # run into trouble in case we need to discard two.
 
-        recheck[np.sum(diffs2use, axis=0) <= 2] = False
+        recheck[np.sum(diffs2use, axis=0) <= 3] = False
 
     return diffs2use, countrate
 
